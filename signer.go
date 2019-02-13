@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
+	"time"
 )
 
 // сюда писать код
@@ -20,9 +22,11 @@ func ExecutePipeline(jobs ...job) {
 			go currJob(actualInput, actualOutput)
 		}
 	}
+	time.Sleep(1 * time.Millisecond)
 }
 
 func SingleHash(in, out chan interface{}) {
+	log.Println("logging singleHash")
 	var strData, md5, nestedHash string
 	strData = fmt.Sprint(<-out)
 	mu := &sync.Mutex{}
@@ -44,6 +48,7 @@ func SingleHash(in, out chan interface{}) {
 }
 
 func MultiHash(in, out chan interface{}) {
+	log.Println("Logging multiHash")
 	var result []string
 	data := fmt.Sprint(<-out)
 	wg := &sync.WaitGroup{}
@@ -64,7 +69,7 @@ func MultiHash(in, out chan interface{}) {
 func CombineResults(in, out chan interface{}) {
 	//sort.Strings(results)
 	//combinedResult := strings.Join(results, "_")
-	fmt.Println("combinedResult")
+	log.Println("combinedResult")
 	// Write total result to chan
 }
 
