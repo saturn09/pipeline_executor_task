@@ -2,22 +2,23 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
 // сюда писать код
 
 func ExecutePipeline(jobs ...job) {
-	in := make(chan interface{})
-	out := make(chan interface{})
+	actualInput := make(chan interface{})
+	actualOutput := make(chan interface{})
 
+	length := len(jobs)
 	for i, currJob := range jobs {
-		if len(jobs) > i + 1{
-			go currJob(out, in)
+		if length > i+1 {
+			go currJob(actualOutput, actualInput)
 		} else {
-			go currJob(in, out)
+			go currJob(actualInput, actualOutput)
 		}
-
 	}
 }
 
@@ -43,7 +44,7 @@ func SingleHash(in, out chan interface{}) {
 }
 
 func MultiHash(in, out chan interface{}) {
-	//var result []string
+	var result []string
 	data := fmt.Sprint(<-out)
 	wg := &sync.WaitGroup{}
 	for i := 0; i < 6; i ++ {
@@ -54,9 +55,10 @@ func MultiHash(in, out chan interface{}) {
 		}(wg)
 	}
 	wg.Wait()
-
-	//result = append(result, DataSignerCrc32(fmt.Sprint(i)+data))
-	//return strings.Join(result, "")
+	for val := range out {
+		result = append(result, val.(string))
+	}
+	out <- strings.Join(result, "")
 }
 
 func CombineResults(in, out chan interface{}) {
