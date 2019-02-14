@@ -5,21 +5,28 @@ import (
 	"log"
 	"strings"
 	"sync"
-	"time"
 )
 
 // сюда писать код
 
 func ExecutePipeline(jobs ...job) {
 	actualInput := make(chan interface{})
-	actualOutput := make(chan interface{})
 
+	wg := &sync.WaitGroup{}
 	for _, currJob := range jobs {
-		currJob(actualInput, actualOutput)
-
+		wg.Add(1)
+		actualOutput := make(chan interface{})
+		go executor(currJob, actualInput, actualOutput, wg)
 		actualInput = actualOutput
 	}
-	time.Sleep(1 * time.Millisecond)
+	wg.Wait()
+}
+
+func executor(job job, in, out chan interface{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+	defer close(out)
+
+	job(in, out)
 }
 
 func SingleHash(in, out chan interface{}) {
