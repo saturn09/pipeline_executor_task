@@ -14,12 +14,11 @@ func ExecutePipeline(jobs ...job) {
 	actualInput := make(chan interface{})
 	actualOutput := make(chan interface{})
 
-	length := len(jobs)
 	for i, currJob := range jobs {
-		if length > i+1 {
-			go currJob(actualOutput, actualInput)
-		} else {
+		if i == 1 {
 			go currJob(actualInput, actualOutput)
+		} else {
+			go currJob(actualOutput, actualInput)
 		}
 	}
 	time.Sleep(1 * time.Millisecond)
@@ -28,7 +27,7 @@ func ExecutePipeline(jobs ...job) {
 func SingleHash(in, out chan interface{}) {
 	log.Println("logging singleHash")
 	var strData, md5, nestedHash string
-	strData = fmt.Sprint(<-out)
+	strData = fmt.Sprint(<-in)
 	mu := &sync.Mutex{}
 	go func(mu *sync.Mutex) { // md5
 		mu.Lock()
@@ -41,16 +40,21 @@ func SingleHash(in, out chan interface{}) {
 		out <- DataSignerCrc32(md5)
 	}()
 
-	go func() { // crc + crc(md5)
+	wg := &sync.WaitGroup{}
+
+	wg.Add(1)
+	go func(wg *sync.WaitGroup) { // crc + crc(md5)
+		defer wg.Done()
 		nestedHash = fmt.Sprint(<-out)
 		out <- DataSignerCrc32(strData) + "~" + nestedHash
-	}()
+	}(wg)
+	wg.Wait()
 }
 
 func MultiHash(in, out chan interface{}) {
 	log.Println("Logging multiHash")
 	var result []string
-	data := fmt.Sprint(<-out)
+	data := fmt.Sprint(<-in)
 	wg := &sync.WaitGroup{}
 	for i := 0; i < 6; i ++ {
 		wg.Add(1)
@@ -67,9 +71,11 @@ func MultiHash(in, out chan interface{}) {
 }
 
 func CombineResults(in, out chan interface{}) {
+	log.Println("combinedResult")
+	res := <-in
+	out <- strings.Join([]string{res.(string)}, "_")
 	//sort.Strings(results)
 	//combinedResult := strings.Join(results, "_")
-	log.Println("combinedResult")
 	// Write total result to chan
 }
 
