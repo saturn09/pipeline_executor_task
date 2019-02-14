@@ -1,28 +1,33 @@
 package main
 
 import (
-	"fmt"
 	"log"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
 
 // сюда писать код
 
-func ExecutePipeline(jobs ...job) {
-	actualInput := make(chan interface{})
+const multiHashLoops = 6
 
+func ExecutePipeline(jobs ...job) {
+	input := make(chan interface{})
 	wg := &sync.WaitGroup{}
+
 	for _, currJob := range jobs {
 		wg.Add(1)
-		actualOutput := make(chan interface{})
-		go executor(currJob, actualInput, actualOutput, wg)
-		actualInput = actualOutput
+
+		output := make(chan interface{})
+		go pipelineExecutor(currJob, input, output, wg)
+		input = output
 	}
 	wg.Wait()
 }
 
-func executor(job job, in, out chan interface{}, wg *sync.WaitGroup) {
+func pipelineExecutor(job job, in, out chan interface{}, wg *sync.WaitGroup) {
+
 	defer wg.Done()
 	defer close(out)
 
@@ -31,61 +36,84 @@ func executor(job job, in, out chan interface{}, wg *sync.WaitGroup) {
 
 func SingleHash(in, out chan interface{}) {
 	log.Println("logging singleHash")
-	var md5, nestedHash string
 	mu := &sync.Mutex{}
 	wg := &sync.WaitGroup{}
 
 	for val := range in {
 		wg.Add(1)
-		go func(wg *sync.WaitGroup, mu *sync.Mutex) {
-			defer wg.Done()
-			go func(mu *sync.Mutex) { // md5
-				mu.Lock()
-				out <- DataSignerMd5(val.(string)) // Lock goroutine to avoid parallel access
-				mu.Unlock()
-			}(mu)
-			go func() { // crc(md5)
-				md5 = fmt.Sprint(<-out)
-				out <- DataSignerCrc32(md5)
-			}()
-
-			go func(wg *sync.WaitGroup) { // crc + crc(md5)
-				defer wg.Done()
-				nestedHash = fmt.Sprint(<-out)
-				out <- DataSignerCrc32(val.(string)) + "~" + nestedHash
-			}(wg)
-		}(wg, mu)
-
+		go singleHashExecutor(val, out, wg, mu)
 	}
 	wg.Wait()
+}
+
+func singleHashExecutor(payload interface{}, out chan interface{}, wg *sync.WaitGroup, mu *sync.Mutex) {
+	defer wg.Done()
+	strData := strconv.Itoa(payload.(int))
+
+	mu.Lock()
+	md5 := DataSignerMd5(strData) // Lock goroutine to avoid parallel access
+	mu.Unlock()
+
+	crcChan := make(chan string)
+	go parallelCrc(strData, crcChan)
+
+	crc32Md5 := DataSignerCrc32(md5)
+	crc32 := <-crcChan
+	out <- crc32 + "~" + crc32Md5
+}
+
+func parallelCrc(strData string, crcChan chan string) {
+	crcChan <- DataSignerCrc32(strData)
 }
 
 func MultiHash(in, out chan interface{}) {
-	log.Println("Logging multiHash")
-	var result []string
-	data := fmt.Sprint(<-in)
 	wg := &sync.WaitGroup{}
-	for i := 0; i < 6; i ++ {
+	for i := range in {
 		wg.Add(1)
-		go func(wg *sync.WaitGroup) {
-			defer wg.Done()
-			out <- DataSignerCrc32(fmt.Sprint(i) + data)
-		}(wg)
+
+		go multiHashExecutor(wg, out, i.(string))
 	}
 	wg.Wait()
-	for val := range out {
-		result = append(result, val.(string))
+}
+
+func multiHashExecutor(wg *sync.WaitGroup, out chan interface{}, val string) {
+	defer wg.Done()
+
+	innerWg := &sync.WaitGroup{}
+	mu := &sync.Mutex{}
+	container := make([]string, multiHashLoops)
+
+	for i := 0; i < multiHashLoops; i ++ {
+		innerWg.Add(1)
+
+		strData := strconv.Itoa(i) + val
+
+		go func(container []string, payload string, ix int, wg *sync.WaitGroup, mu *sync.Mutex) {
+			defer wg.Done()
+			payload = DataSignerCrc32(payload)
+			mu.Lock()
+			container[ix] = payload
+			mu.Unlock()
+		}(container, strData, i, innerWg, mu)
 	}
-	out <- strings.Join(result, "")
+	innerWg.Wait()
+
+	joinResult := strings.Join(container, "")
+	log.Printf("MultiHash result %s", joinResult)
+	out <- joinResult
 }
 
 func CombineResults(in, out chan interface{}) {
-	log.Println("combinedResult")
-	res := <-in
-	out <- strings.Join([]string{res.(string)}, "_")
-	//sort.Strings(results)
-	//combinedResult := strings.Join(results, "_")
-	// Write total result to chan
+	var results []string
+	for val := range in {
+		results = append(results, val.(string))
+	}
+	sort.Strings(results)
+	result := strings.Join(results, "_")
+
+	log.Printf("CombineResults \n%s\n", result)
+
+	out <- result
 }
 
 func main() {
@@ -98,6 +126,10 @@ func main() {
 		job(SingleHash),
 		job(MultiHash),
 		job(CombineResults),
+		job(func(in, out chan interface{}) {
+			data := <-in
+			log.Println(data.(string))
+		}),
 	}
 
 	ExecutePipeline(jobs...)
